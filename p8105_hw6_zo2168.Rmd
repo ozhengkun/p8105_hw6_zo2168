@@ -1,0 +1,15 @@
+---
+title: "P8105_hw6_zo2168"
+author: "Zhengkun Ou"
+date: "2024-11-20"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+
+```
+
