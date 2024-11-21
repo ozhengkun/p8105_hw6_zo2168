@@ -2,14 +2,162 @@
 title: "P8105_hw6_zo2168"
 author: "Zhengkun Ou"
 date: "2024-11-20"
-output: html_document
+output: github_document
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(rvest)
+library(httr)
+library(modelr)
+library(mgcv)
+library(SemiPar)
+```
+
+## Question 1
+```{r}
+
+```
+
+## Question 2
+
+```{r}
+homicide <- read_csv(file = "homicide-data.csv", na = c(".", "NA", ""))
+homicide_clean <- 
+  homicide |> 
+  janitor::clean_names() |>
+  mutate(city_state = str_c(city, state, sep = ", "), 
+         homicide_solved = ifelse(disposition %in% c("Closed without arrest", "Closed by arrest"), TRUE, FALSE),
+         victim_age = ifelse(victim_age == "Unknown", NA, as.numeric(victim_age))) |>
+  filter(!city_state %in% c("Dallas, TX","Phoenix, AZ","Kansas City, MO", "Tulsa, AL"), 
+         victim_race %in% c("White", "Black"))
+
 ```
 
 ```{r}
+baltimore_df = 
+  homicide_clean |>
+  filter(city_state == "Baltimore, MD")
+  
+baltimore_model <- glm(homicide_solved ~ victim_age + victim_sex + victim_race, data = baltimore_df)
+
+baltimore_results = broom::tidy(baltimore_model, conf.int = TRUE) |>
+                    filter(term == "victim_sexMale") |>
+                    mutate(OR = exp(estimate), 
+                           OR_lower = exp(conf.low),
+                           OR_upper = exp(conf.high)) |> 
+                    select(OR, OR_lower, OR_upper)
+
+city_results = homicide_clean |> 
+  nest(data = -city_state) |>
+  mutate(
+    models = map(data, \(x) glm(homicide_solved ~ victim_age + victim_sex + victim_race, 
+                           data = x)),
+    results = map(models, \(x) broom::tidy(x, conf.int = TRUE))
+  ) |>
+  unnest(results) |> 
+  filter(term == "victim_sexMale") |> 
+  mutate(
+    OR = exp(estimate),
+    OR_lower = exp(conf.low),
+    OR_upper = exp(conf.high)
+  ) |>
+  select(city_state, OR, OR_lower, OR_upper)
+  
+  
+city_results |>
+ mutate(city_state = fct_reorder(city_state, OR)) |>
+ ggplot(aes(x = city_state, y = OR)) +
+ geom_point() + 
+ geom_errorbar(aes(ymin = OR_lower, ymax = OR_upper)) + 
+ coord_flip() +
+ geom_hline(yintercept = 1, linetype = "dashed", color = "red") +
+ labs(
+   title = "Odds Ratios for Solving Homicides (Male vs Female Victims)",
+   x = "City",
+   y = "Odds Ratio (Male vs Female)"
+ )
+```
+Most cities have OR < 1 (to the left of red dashed line), meaning that homicides with male victims are generally less likely to be solved than those with female victims.
+
+Cities range in ORs from about 0.6 (New York) to 1.2 (Fresno), showing considerable variation.
+
+Some cities (like Philadelphia, Chicago) have narrow CIs, suggesting more precise estimates
+Others (like Fresno, San Bernardino) have wide CIs, indicating less precision
+
+Many cities have CIs that don't cross 1, suggesting significantly lower odds of solving male victim homicides
+A few cities (like Fresno, Minneapolis) have CIs crossing 1, meaning the male/female difference isn't statistically significant
+
+The ordering of cities by OR helps visualize the pattern and identify potential regional or size-based trends.
+
+
+## Problem 3
+
+```{r}
+birth_weight = read_csv("birthweight.csv", na = c(".", "NA", "")) |> janitor::clean_names()
+skimr::skim(birth_weight)
+birth_weight_clean = birth_weight |> mutate(babysex = factor(babysex, levels = c(1, 2), labels = c("Male", "Female")),
+                                            frace = factor(frace, levels = c(1, 2, 3, 4, 8), 
+                                                          labels = c("White", "Black", "Asian", "Puerto Rican", "Other")),
+                                            malform = factor(malform, levels = c(0, 1), labels = c("Absent", "Present")),
+                                            mrace = factor(mrace, levels = c(1, 2, 3, 4, 8), 
+                                                          labels = c("White", "Black", "Asian", "Puerto Rican", "Other")))
+
+```
+```{r}
+lm_1 <- lm(bwt ~ babysex + bhead + blength + gaweeks + 
+                   delwt + smoken + wtgain + ppbmi, 
+                   data = birth_weight_clean)
+lm_1_tidy <- broom::tidy(lm_1)
+summary(lm_1)
+lm_1_tidy |> 
+```
+```{r}
+birth_weight_clean |>
+  add_predictions(lm_1) |>
+  add_residuals(lm_1) |>
+  ggplot(aes(x = pred, y = resid)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "loess", se = FALSE, color = "blue")
+
+```
+```{r}
+lm_2 <- lm(bwt ~ blength + gaweeks, data = birth_weight_clean)
+lm_3 <- lm(bwt ~ bhead * blength * babysex, data = birth_weight_clean)
+
+birth_df = 
+  crossv_mc(birth_weight_clean, 100) |> 
+  mutate(train = map(train, as_tibble),
+         test = map(test, as_tibble))
+                                                  
+birth_df = 
+  birth_df |>
+  mutate(model1 = map (train, \(df) lm(bwt ~ babysex + bhead + blength + gaweeks + 
+                   delwt + smoken + wtgain + ppbmi, 
+                   data = df)),
+         model2 = map(train, \(df) lm(bwt ~ blength + gaweeks, data = df)),
+         model3 = map(train, \(df) lm(bwt ~ bhead * blength * babysex, data = df))
+  ) |>
+  mutate(rmse_model1 = map2_dbl(model1, test, \(mod, df) rmse(model = mod, data = df)), 
+         rmse_model2 = map2_dbl(model2, test, \(mod, df) rmse(model = mod, data = df)),
+         rmse_model3 = map2_dbl(model3, test, \(mod, df) rmse(model = mod, data = df)))
+  
+birth_df |>
+  select(starts_with("rmse")) |>
+  pivot_longer(
+    everything(),
+    names_to = "model",
+    values_to = "rmse", 
+    names_prefix = "rmse_"
+  ) |>
+  ggplot(aes(x = model, y = rmse)) +
+  geom_violin() +
+  labs(
+    title = "Cross-validated RMSE by Model",
+    x = "Model",
+    y = "RMSE"
+  )
 
 ```
 
