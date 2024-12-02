@@ -17,8 +17,86 @@ library(SemiPar)
 
 ## Question 1
 ```{r}
+weather_df = 
+  rnoaa::meteo_pull_monitors(
+    c("USW00094728"),
+    var = c("PRCP", "TMIN", "TMAX"), 
+    date_min = "2017-01-01",
+    date_max = "2017-12-31") %>%
+  mutate(
+    name = recode(id, USW00094728 = "CentralPark_NY"),
+    tmin = tmin / 10,
+    tmax = tmax / 10) %>%
+  select(name, id, everything())
 
 ```
+
+```{r}
+bootstrap_analysis = function(data, n_boot = 5000) {
+  
+  bootstrap_results = map_dfr(1:n_boot, function(i) {
+    boot_data = slice_sample(data, n = nrow(data), replace = TRUE)
+    boot_fit = lm(tmax ~ tmin, data = boot_data)
+    r2 = broom::glance(boot_fit)$r.squared
+    coefs = broom::tidy(boot_fit)
+    beta0 = coefs$estimate[1]  
+    beta1 = coefs$estimate[2] 
+    
+    tibble(
+      iteration = i,
+      r_squared = r2,
+      log_beta_prod = log(beta0 * beta1)
+    )
+  })
+  
+  return(bootstrap_results)
+}
+
+set.seed(123) 
+boot_results = bootstrap_analysis(weather_df)
+
+
+p1 = ggplot(boot_results, aes(x = r_squared)) +
+  geom_histogram(bins = 50, fill = "steelblue", alpha = 0.7) +
+  labs(title = "Bootstrap Distribution of R²",
+       x = "R²",
+       y = "Count") +
+  theme_minimal()
+p1
+
+# Plot for log(β₀*β₁)
+p2 = ggplot(boot_results, aes(x = log_beta_prod)) +
+  geom_histogram(bins = 50, fill = "steelblue", alpha = 0.7) +
+  labs(title = "Bootstrap Distribution of log(β₀*β₁)",
+       x = "log(β₀*β₁)",
+       y = "Count") +
+  theme_minimal()
+
+p2
+
+ci_results = boot_results %>%
+  summarize(
+    r2_ci_lower = quantile(r_squared, 0.025),
+    r2_ci_upper = quantile(r_squared, 0.975),
+    log_beta_ci_lower = quantile(log_beta_prod, 0.025),
+    log_beta_ci_upper = quantile(log_beta_prod, 0.975)
+  )
+ci_results
+```
+For the R² distribution:
+- The distribution is roughly symmetric and appears approximately normal
+- It's centered around 0.91
+- The spread is relatively narrow, ranging from about 0.88 to 0.94
+- This suggests the model consistently explains around 91% of the variance in tmax, with relatively little uncertainty
+- The narrow range indicates high stability in the model's explanatory power across bootstrap samples
+
+For the log(β₀*β₁) distribution:
+- This distribution is also approximately normal and symmetric
+- It's centered around 2.0
+- The range is approximately 1.95 to 2.10
+- The symmetry suggests stability in the relationship between the intercept and slope coefficients
+- Like the R² distribution, the relatively narrow spread indicates consistency in the parameter estimates across bootstrap samples
+
 
 ## Question 2
 
@@ -42,12 +120,14 @@ baltimore_df =
   
 baltimore_model <- glm(homicide_solved ~ victim_age + victim_sex + victim_race, data = baltimore_df)
 
+
 baltimore_results = broom::tidy(baltimore_model, conf.int = TRUE) |>
                     filter(term == "victim_sexMale") |>
                     mutate(OR = exp(estimate), 
                            OR_lower = exp(conf.low),
                            OR_upper = exp(conf.high)) |> 
                     select(OR, OR_lower, OR_upper)
+baltimore_results
 
 city_results = homicide_clean |> 
   nest(data = -city_state) |>
@@ -96,13 +176,16 @@ The ordering of cities by OR helps visualize the pattern and identify potential 
 
 ```{r}
 birth_weight = read_csv("birthweight.csv", na = c(".", "NA", "")) |> janitor::clean_names()
-skimr::skim(birth_weight)
-birth_weight_clean = birth_weight |> mutate(babysex = factor(babysex, levels = c(1, 2), labels = c("Male", "Female")),
-                                            frace = factor(frace, levels = c(1, 2, 3, 4, 8), 
-                                                          labels = c("White", "Black", "Asian", "Puerto Rican", "Other")),
-                                            malform = factor(malform, levels = c(0, 1), labels = c("Absent", "Present")),
-                                            mrace = factor(mrace, levels = c(1, 2, 3, 4, 8), 
-                                                          labels = c("White", "Black", "Asian", "Puerto Rican", "Other")))
+birth_weight_clean = 
+  birth_weight |> 
+  mutate(babysex = factor(babysex, levels = c(1, 2), 
+                          labels = c("Male", "Female")),
+         frace = factor(frace, levels = c(1, 2, 3, 4, 8),
+                        labels = c("White", "Black", "Asian", "Puerto Rican", "Other")),
+         malform = factor(malform, levels = c(0, 1), 
+                          labels = c("Absent", "Present")),
+         mrace = factor(mrace, levels = c(1, 2, 3, 4, 8),
+                        labels = c("White", "Black", "Asian", "Puerto Rican", "Other")))
 
 ```
 ```{r}
@@ -110,8 +193,7 @@ lm_1 <- lm(bwt ~ babysex + bhead + blength + gaweeks +
                    delwt + smoken + wtgain + ppbmi, 
                    data = birth_weight_clean)
 lm_1_tidy <- broom::tidy(lm_1)
-summary(lm_1)
-lm_1_tidy |> 
+lm_1_tidy
 ```
 ```{r}
 birth_weight_clean |>
@@ -122,6 +204,31 @@ birth_weight_clean |>
   geom_smooth(method = "loess", se = FALSE, color = "blue")
 
 ```
+
+1. **Variable Selection**:
+   - `babysex`: Known biological differences in birthweight between male and female babies
+   - `bhead` and `blength`: Direct physical measurements that would naturally correlate with weight
+   - `gaweeks`: Gestational age determines how long the baby has had to develop
+   - `delwt`: Mother's delivery weight could indicate nutritional status
+   - `smoken`: Smoking is known to negatively impact fetal development
+   - `wtgain`: Weight gain during pregnancy reflects nutritional resources available to the fetus
+   - `ppbmi`: Pre-pregnancy BMI helps account for mother's baseline health status
+
+2. **Variables Excluded**:
+   - `pnumlbw` and `pnumgsa`: Many zeros and less relevant for first-time mothers
+   - `malform`: Rare occurrence that might skew the model
+   - Race variables (`mrace`, `frace`): To avoid encoding potential societal biases in the model
+   - `fincome`: May be indirectly captured through other health indicators
+   - `parity`: Effect might be captured by other maternal characteristics
+
+
+3. **Statistical thinking**:
+   - Selected variables are likely to have strong linear relationships with birthweight
+   - Avoided variables with too many missing values or rare categories
+   - Included variables that represent different aspects of fetal development and maternal health
+   - Selected variables that are typically available during pregnancy for practical application
+
+This model uses both clinical knowledge (known biological factors affecting birthweight) and practical considerations (availability and reliability of measurements). The focus was on creating a model that would be both interpretable and clinically useful.
 ```{r}
 lm_2 <- lm(bwt ~ blength + gaweeks, data = birth_weight_clean)
 lm_3 <- lm(bwt ~ bhead * blength * babysex, data = birth_weight_clean)
@@ -151,6 +258,7 @@ birth_df |>
     values_to = "rmse", 
     names_prefix = "rmse_"
   ) |>
+  mutate(model = fct_inorder(model)) |>
   ggplot(aes(x = model, y = rmse)) +
   geom_violin() +
   labs(
@@ -161,3 +269,11 @@ birth_df |>
 
 ```
 
+
+Model 1 and Model 3 perform similarly well, with Model 1 showing slightly more consistent performance
+
+Model 2 is clearly inferior, with higher RMSE and more variability
+
+The complexity added by the interactions in Model 3 doesn't seem to provide substantial improvement over the main effects in Model 1
+
+The simpler structure of Model 1 might make it preferable since it achieves similar performance with less complexity
